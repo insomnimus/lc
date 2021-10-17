@@ -18,6 +18,7 @@ use glob::MatchOptions;
 use ignore::{
 	overrides::OverrideBuilder,
 	WalkBuilder,
+	WalkState::Continue,
 };
 use rayon::ThreadPoolBuilder;
 
@@ -39,7 +40,7 @@ pub struct Cmd {
 impl Cmd {
 	pub fn from_args() -> Self {
 		let m = app::new().get_matches();
-		if atty::is(Stream::Stdin) {
+		if !atty::is(Stream::Stdin) {
 			return Self {
 				args: Vec::new(),
 				n_jobs: 0,
@@ -133,12 +134,18 @@ impl Cmd {
 					.run(move || {
 						let walker_jobs = walker_jobs.clone();
 						Box::new(move |p| {
-							match p {
-								Ok(p) => walker_jobs.send(p.into_path()).unwrap(),
-								Err(_) if quiet => (),
-								Err(e) => eprintln!("error: {}", e),
+							let entry = match p {
+								Ok(x) => x,
+								Err(_) if quiet => return Continue,
+								Err(e) => {
+									eprintln!("error: {}", e);
+									return Continue;
+								}
 							};
-							ignore::WalkState::Continue
+							if entry.file_type().map_or(false, |f| f.is_file()) {
+								walker_jobs.send(entry.into_path()).unwrap();
+							}
+							Continue
 						})
 					});
 			});
@@ -174,6 +181,9 @@ impl Cmd {
 					jobs.send(p).unwrap();
 				}
 			});
+		} else {
+			// Required because otherwise receiver will never finish iterating.
+			std::mem::drop(jobs);
 		}
 
 		work::work(recv, quiet);
