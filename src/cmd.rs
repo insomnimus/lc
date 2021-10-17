@@ -56,8 +56,8 @@ impl Cmd {
 		let args = match m.values_of("pattern") {
 			Some(xs) => xs.map(String::from).collect::<Vec<_>>(),
 			None => {
-				println!("{}", app::new().get_about().unwrap());
-				process::exit(0);
+				eprintln!("error: you must specify at least one file/pattern");
+				process::exit(2);
 			}
 		};
 

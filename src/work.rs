@@ -31,7 +31,13 @@ pub fn work(jobs: Receiver<PathBuf>, quiet: bool) {
 	let n_files = total.len();
 	let n_lines: usize = total.iter().copied().sum();
 
-	println!("{} lines in {} files", n_lines, n_files);
+	println!(
+		"{} {} in {} {}",
+		n_lines,
+		if n_lines == 1 { "line" } else { "lines" },
+		n_files,
+		if n_files == 1 { "file" } else { "files" },
+	);
 }
 
 fn count_lines(p: PathBuf) -> Result<usize> {
