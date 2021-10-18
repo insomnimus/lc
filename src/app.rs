@@ -11,7 +11,7 @@ pub fn new() -> App<'static> {
 
 	let args = Arg::new("pattern")
 		.about("Files or glob patterns to count lines of.")
-		.multiple_occurrences(true);
+		.multiple_values(true);
 
 	let no_ignore = Arg::new("no-ignore")
 		.about("Do not use .gitignore and .ignore files.")
