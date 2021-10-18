@@ -18,13 +18,6 @@ pub fn new() -> App<'static> {
 		.short('n')
 		.long("no-ignore");
 
-	let depth = Arg::new("depth")
-		.about("Maximum recursion depth.")
-		.short('d')
-		.long("depth")
-		.takes_value(true)
-		.validator(is_positive);
-
 	let n_jobs = Arg::new("jobs")
 		.about("Number of parallel jobs. Defaults to the number of cpus.")
 		.short('j')
@@ -46,7 +39,6 @@ pub fn new() -> App<'static> {
 		.arg(quiet)
 		.arg(no_ignore)
 		.arg(n_jobs)
-		.arg(depth)
 		.arg(args)
 }
 
