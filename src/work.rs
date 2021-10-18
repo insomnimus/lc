@@ -31,6 +31,10 @@ pub fn work(jobs: Receiver<PathBuf>, quiet: bool) {
 	let n_files = total.len();
 	let n_lines: usize = total.iter().copied().sum();
 
+	if n_files == 0 {
+		return;
+	}
+
 	println!(
 		"{} {} in {} {}",
 		n_lines,

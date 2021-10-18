@@ -4,33 +4,24 @@ use std::{
 		self,
 		BufRead,
 	},
-	path::{
-		Component,
-		Path,
-	},
 	process,
 	sync::mpsc,
 	thread,
 };
 
 use atty::Stream;
-use glob::MatchOptions;
-use ignore::{
-	overrides::OverrideBuilder,
-	WalkBuilder,
-	WalkState::Continue,
-};
+use ignore::WalkState::Continue;
 use rayon::ThreadPoolBuilder;
 
 use crate::{
 	app,
+	job::Job,
 	work,
 };
 
 pub struct Cmd {
 	args: Vec<String>,
 	no_ignore: bool,
-	depth: Option<usize>,
 	quiet: bool,
 	follow_links: bool,
 	n_jobs: usize,
@@ -45,7 +36,6 @@ impl Cmd {
 				args: Vec::new(),
 				n_jobs: 0,
 				read_stdin: true,
-				depth: None,
 				follow_links: false,
 				quiet: false,
 				no_ignore: false,
@@ -67,12 +57,9 @@ impl Cmd {
 			.map(|s| s.parse::<usize>().unwrap())
 			.unwrap_or(0);
 
-		let depth = m.value_of("depth").map(|s| s.parse::<usize>().unwrap());
-
 		let no_ignore = m.is_present("no-ignore");
 
 		Self {
-			depth,
 			quiet,
 			follow_links,
 			args,
@@ -84,109 +71,54 @@ impl Cmd {
 }
 
 impl Cmd {
-	pub fn run(self) -> Result<(), Box<dyn Error>> {
+	pub fn run(&self) -> Result<(), Box<dyn Error>> {
 		if self.read_stdin {
 			return read_stdin();
 		}
 
-		let Self {
-			mut args,
-			n_jobs,
-			depth,
-			follow_links,
-			quiet,
-			no_ignore,
-			..
-		} = self;
-
 		ThreadPoolBuilder::new()
-			.num_threads(n_jobs)
-			.build_global()
-			.unwrap();
+			.num_threads(self.n_jobs)
+			.build_global()?;
 
 		let (jobs, recv) = mpsc::channel();
 
-		let mut overrides = OverrideBuilder::new("./");
-		overrides.case_insensitive(true).unwrap();
+		for s in &self.args {
+			match Job::new(s) {
+				Job::File(p) => jobs.send(p)?,
+				Job::Walk(mut builder) => {
+					let walker_jobs = jobs.clone();
+					let walker = builder
+						.standard_filters(!self.no_ignore)
+						.threads(self.n_jobs)
+						.follow_links(self.follow_links)
+						.build_parallel();
+					let quiet = self.quiet;
 
-		args.retain(|s| {
-			if is_include(s) {
-				overrides.add(s).unwrap();
-				false
-			} else {
-				true
-			}
-		});
-
-		let overrides = overrides.build()?;
-
-		if !overrides.is_empty() {
-			let walker_jobs = jobs.clone();
-
-			thread::spawn(move || {
-				WalkBuilder::new("./")
-					.overrides(overrides)
-					.threads(n_jobs)
-					.max_depth(depth)
-					.follow_links(follow_links)
-					.standard_filters(!no_ignore)
-					.build_parallel()
-					.run(move || {
-						let walker_jobs = walker_jobs.clone();
-						Box::new(move |p| {
-							let entry = match p {
-								Ok(x) => x,
-								Err(_) if quiet => return Continue,
-								Err(e) => {
-									eprintln!("error: {}", e);
-									return Continue;
+					thread::spawn(move || {
+						walker.run(move || {
+							let walker_jobs = walker_jobs.clone();
+							Box::new(move |p| {
+								let entry = match p {
+									Ok(x) => x,
+									Err(_) if quiet => return Continue,
+									Err(e) => {
+										eprintln!("error: {}", e);
+										return Continue;
+									}
+								};
+								if entry.file_type().map_or(false, |f| f.is_file()) {
+									walker_jobs.send(entry.into_path()).unwrap();
 								}
-							};
-							if entry.file_type().map_or(false, |f| f.is_file()) {
-								walker_jobs.send(entry.into_path()).unwrap();
-							}
-							Continue
-						})
+								Continue
+							})
+						});
 					});
-			});
-		}
-
-		if !args.is_empty() {
-			thread::spawn(move || {
-				for p in args
-					.iter()
-					.map(|s| {
-						const OPTS: MatchOptions = MatchOptions {
-							require_literal_separator: true,
-							require_literal_leading_dot: true,
-							case_sensitive: false,
-						};
-
-						glob::glob_with(s, OPTS)
-							.unwrap_or_else(|e| {
-								eprintln!("error parsing glob pattern: {}", e);
-								process::exit(2);
-							})
-							.filter_map(|r| match r {
-								Ok(x) => Some(x),
-								Err(_) if quiet => None,
-								Err(e) => {
-									eprintln!("error: {}", e);
-									None
-								}
-							})
-					})
-					.flatten()
-				{
-					jobs.send(p).unwrap();
 				}
-			});
-		} else {
-			// Required because otherwise receiver will never finish iterating.
-			std::mem::drop(jobs);
+			};
 		}
 
-		work::work(recv, quiet);
+		std::mem::drop(jobs);
+		work::work(recv, self.quiet);
 		Ok(())
 	}
 }
@@ -206,19 +138,4 @@ fn read_stdin() -> Result<(), Box<dyn Error>> {
 	}
 
 	Ok(())
-}
-
-fn is_include(p: impl AsRef<Path>) -> bool {
-	let p = p.as_ref();
-
-	match p.to_str() {
-		Some(s) if !s.contains('*') => return false,
-		_ => (),
-	};
-
-	let mut comps = p.components();
-	match comps.next() {
-		None => true,
-		Some(c) => matches!(c, Component::Normal(_)),
-	}
 }

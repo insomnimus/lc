@@ -1,5 +1,6 @@
 mod app;
 mod cmd;
+mod job;
 mod work;
 
 fn main() {
