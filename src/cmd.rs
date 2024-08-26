@@ -3,74 +3,53 @@ use std::{
 	io::{
 		self,
 		BufRead,
+		IsTerminal,
 	},
-	process,
 	sync::mpsc,
 	thread,
 };
 
-use atty::Stream;
+use clap::Parser;
 use ignore::WalkState::Continue;
 use rayon::ThreadPoolBuilder;
 
 use crate::{
-	app,
 	job::Job,
 	work,
 };
 
+/// Count lines of files
+#[derive(Parser)]
+#[command(version)]
 pub struct Cmd {
-	args: Vec<String>,
+	/// Do not use .gitignore and .ignore files
+	#[arg(short, long)]
 	no_ignore: bool,
+	/// Do not show non-fatal error messages
+	#[arg(short, long)]
 	quiet: bool,
+	/// Follow symbolic links
+	#[arg(short = 'l', long)]
 	follow_links: bool,
+	/// Number of parallel jobs
+	#[arg(short = 'j', long = "jobs", default_value_t = 0)]
 	n_jobs: usize,
+
+	/// The files or glob patterns
+	#[arg()]
+	args: Vec<String>,
+	/// Read lines from standard input instead (you don't need to use this if you're already piping to lc)
+	#[arg(long)]
 	read_stdin: bool,
 }
 
 impl Cmd {
 	pub fn from_args() -> Self {
-		let m = app::new().get_matches();
-		if !atty::is(Stream::Stdin) {
-			return Self {
-				args: Vec::new(),
-				n_jobs: 0,
-				read_stdin: true,
-				follow_links: false,
-				quiet: false,
-				no_ignore: false,
-			};
-		}
-
-		let quiet = m.is_present("quiet");
-		let args = match m.values_of("pattern") {
-			Some(xs) => xs.map(String::from).collect::<Vec<_>>(),
-			None => {
-				eprintln!("error: you must specify at least one file/pattern");
-				process::exit(2);
-			}
-		};
-
-		let follow_links = m.is_present("follow-links");
-		let n_jobs = m
-			.value_of("jobs")
-			.map(|s| s.parse::<usize>().unwrap())
-			.unwrap_or(0);
-
-		let no_ignore = m.is_present("no-ignore");
-
-		Self {
-			quiet,
-			follow_links,
-			args,
-			n_jobs,
-			no_ignore,
-			read_stdin: false,
-		}
+		let mut a = Self::parse();
+		a.read_stdin = a.read_stdin || !io::stdin().is_terminal();
+		a
 	}
-}
 
-impl Cmd {
 	pub fn run(&self) -> Result<(), Box<dyn Error>> {
 		if self.read_stdin {
 			return read_stdin();
